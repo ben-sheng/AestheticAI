@@ -51,7 +51,7 @@ class ImagePromptDataset(Dataset):
 # Training
 # =========================
 def main():
-    parser = argparse.ArgumentParser("Train SDXL LoRA (diffusers >= 0.36)")
+    parser = argparse.ArgumentParser("Train SDXL LoRA (diffusers 0.36 safe)")
     parser.add_argument("--model_id", default="stabilityai/stable-diffusion-xl-base-1.0")
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--output_dir", required=True)
@@ -72,7 +72,7 @@ def main():
     dtype = torch.float16 if args.mixed_precision == "fp16" else torch.float32
 
     # =========================
-    # Load SDXL pipeline
+    # Load pipeline
     # =========================
     pipe = StableDiffusionXLPipeline.from_pretrained(
         args.model_id,
@@ -92,7 +92,7 @@ def main():
         m.eval()
 
     # =========================
-    # LoRA (PEFT, official)
+    # LoRA (PEFT)
     # =========================
     lora_config = LoraConfig(
         r=args.rank,
@@ -143,21 +143,21 @@ def main():
 
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-            # ---- Encode text (关键：output_hidden_states=True)
+            # ---- Encode text (diffusers 0.36 compatible)
             prompt_embeds, pooled_prompt_embeds, *_ = pipe.encode_prompt(
                 prompts,
                 device=device,
                 do_classifier_free_guidance=False,
-                output_hidden_states=True,  # ⭐ 必须，否则 _get_add_time_ids 会炸
             )
 
-            # ---- SDXL additional conditioning (官方写法)
+            # ---- SDXL additional conditioning (关键修复点)
             add_time_ids = pipe._get_add_time_ids(
                 original_size=(args.resolution, args.resolution),
                 crop_coords_top_left=(0, 0),
                 target_size=(args.resolution, args.resolution),
                 device=device,
                 dtype=prompt_embeds.dtype,
+                text_encoder_projection_dim=pipe.text_encoder_2.config.projection_dim,
             )
             add_time_ids = add_time_ids.repeat(latents.shape[0], 1)
 
