@@ -10,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 from diffusers import StableDiffusionXLPipeline, DDPMScheduler
-from diffusers.models.attention_processor import LoraConfig
+from peft import LoraConfig
 
 
 # =========================
