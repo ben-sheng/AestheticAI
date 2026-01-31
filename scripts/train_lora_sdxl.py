@@ -116,7 +116,8 @@ def main():
     )
     dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True)
 
-    scaler = torch.cuda.amp.GradScaler(enabled=args.mixed_precision == "fp16")
+    scaler = torch.amp.GradScaler("cuda", enabled=args.mixed_precision == "fp16")
+
 
     global_step = 0
     while global_step < args.max_train_steps:
@@ -136,7 +137,7 @@ def main():
 
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-            prompt_embeds, pooled_prompt_embeds = pipe.encode_prompt(
+            prompt_embeds, pooled_prompt_embeds, _ = pipe.encode_prompt(
                 prompts,
                 device=device,
                 do_classifier_free_guidance=False,
