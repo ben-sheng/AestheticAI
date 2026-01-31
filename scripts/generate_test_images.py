@@ -32,7 +32,9 @@ def main() -> None:
     parser.add_argument("--negative_prompt", default="blurry, low quality, distorted")
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--guidance_scale", type=float, default=7.5)
-    parser.add_argument("--resolution", type=int, default=1024)
+    parser.add_argument("--resolution", type=int, default=1280, help="Default height/width when --width/--height not set (default 1280).")
+    parser.add_argument("--width", type=int, default=None, help="Output width (default: same as --resolution).")
+    parser.add_argument("--height", type=int, default=None, help="Output height (default: same as --resolution).")
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
@@ -67,6 +69,12 @@ def main() -> None:
     pipe.to(device)
     pipe.unet.load_attn_procs(lora_path)
 
+    width = args.width if args.width is not None else args.resolution
+    height = args.height if args.height is not None else args.resolution
+    # SDXL expects multiples of 8; round to avoid surprises
+    width = (width // 8) * 8
+    height = (height // 8) * 8
+
     output_dir.mkdir(parents=True, exist_ok=True)
     generator = None
     if args.seed is not None:
@@ -75,15 +83,15 @@ def main() -> None:
     for i, input_path in enumerate(test_images):
         stem = input_path.stem
         out_path = output_dir / f"{stem}_generated.png"
-        print(f"[{i + 1}/{len(test_images)}] Generating for {input_path.name} -> {out_path}")
+        print(f"[{i + 1}/{len(test_images)}] Generating {width}x{height} for {input_path.name} -> {out_path}")
 
         image = pipe(
             prompt=prompt,
             negative_prompt=args.negative_prompt,
             num_inference_steps=args.steps,
             guidance_scale=args.guidance_scale,
-            height=args.resolution,
-            width=args.resolution,
+            height=height,
+            width=width,
             generator=generator,
         ).images[0]
 
