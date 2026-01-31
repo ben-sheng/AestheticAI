@@ -38,28 +38,107 @@ def feather_alpha(rgba: Image.Image, radius: int = 3) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, a_smooth))
 
 
-def _auto_placement_and_scale(
+def _auto_scale_only(
     sw: int, sh: int, pw: int, ph: int, index: int,
 ) -> tuple[float, int, int]:
-    """Decide scale and (x,y) so product fits scene harmoniously (协调)."""
-    # Scale: 0.38–0.50 of smaller scene dimension so scene is visible and product not overwhelming
-    scale_min, scale_max = 0.38, 0.50
+    """Decide scale and resulting (new_pw, new_ph). Position is chosen later from scene analysis."""
+    scale_min, scale_max = 0.42, 0.48
     t = (index % 5) / 5.0
-    scale_max_use = scale_min + (scale_max - scale_min) * (0.7 + 0.3 * t)
+    scale_max_use = scale_min + (scale_max - scale_min) * (0.8 + 0.2 * t)
     scale_by_w = (sw * scale_max_use) / pw
     scale_by_h = (sh * scale_max_use) / ph
     scale = min(scale_by_w, scale_by_h, 1.0)
     new_pw = int(pw * scale)
     new_ph = int(ph * scale)
-    margin_bottom = max(sh // 15, 20)
-    margin_side = max(sw // 12, 30)
+    return scale, new_pw, new_ph
+
+
+def _analyze_scene_placement(scene: Image.Image, new_pw: int, new_ph: int) -> tuple[int, int]:
+    """
+    Analyze background to find where the product best fits (真正融入).
+    Prefer: low variance (floor/carpet), low edge density (open space), in lower half.
+    """
+    from PIL import ImageFilter
+    sw, sh = scene.size
+    gray = scene.convert("L")
+    pixels = list(gray.getdata())
+    # Edge map: high value = edge; we want to avoid busy areas
+    edge = gray.filter(ImageFilter.FIND_EDGES)
+    edge_data = list(edge.getdata())
+    # Grid over lower ~55% of image (floor zone), 5 cols x 2 rows
+    ncols, nrows = 5, 2
+    row_start = int(sh * 0.45)
+    row_end = sh
+    col_w = sw // ncols
+    row_h = (row_end - row_start) // nrows
+    best_score = -1.0
+    best_cx, best_cy = sw // 2, row_start + row_h // 2
+    for ri in range(nrows):
+        for ci in range(ncols):
+            x0 = ci * col_w
+            y0 = row_start + ri * row_h
+            x1 = min(x0 + col_w, sw)
+            y1 = min(y0 + row_h, row_end)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            # Score: low variance + low edges = suitable floor/empty space
+            var_sum = 0.0
+            mean_sum = 0.0
+            count = 0
+            edge_sum = 0
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    idx = yy * sw + xx
+                    p = pixels[idx]
+                    e = edge_data[idx]
+                    mean_sum += p
+                    var_sum += p * p
+                    edge_sum += e
+                    count += 1
+            if count == 0:
+                continue
+            mean_ = mean_sum / count
+            variance = (var_sum / count) - (mean_ * mean_)
+            edge_mean = edge_sum / count
+            # Prefer uniform (low var) and non-busy (low edge); avoid very dark (likely shadow)
+            score = 1.0 / (1.0 + variance * 0.01) * 1.0 / (1.0 + edge_mean * 0.02)
+            if mean_ < 40:
+                score *= 0.5
+            if score > best_score:
+                best_score = score
+                best_cx = (x0 + x1) // 2
+                best_cy = (y0 + y1) // 2
+    # Place product so its bottom-center is near (best_cx, best_cy); product sits on floor
+    margin_bottom = max(sh // 14, 16)
     y = sh - new_ph - margin_bottom
-    # Slight horizontal variation: center with small offset so not always same
-    offsets = [-sw // 8, 0, sw // 8, -sw // 12, sw // 12]
-    x_center = (sw - new_pw) // 2
-    x = x_center + offsets[index % len(offsets)]
-    x = max(margin_side, min(sw - new_pw - margin_side, x))
-    return scale, x, y
+    x = best_cx - new_pw // 2
+    x = max(0, min(sw - new_pw, x))
+    return x, y
+
+
+def _draw_soft_shadow(
+    scene: Image.Image, px: int, py: int, pw: int, ph: int,
+    shadow_alpha: int = 72, blur_radius: int = 20,
+) -> Image.Image:
+    """Draw a soft elliptical shadow under the product to ground it (落地感). Returns new RGB image."""
+    from PIL import ImageDraw, ImageFilter
+    w, h = scene.size
+    scene_rgba = scene.convert("RGBA")
+    pad = max(pw // 5, 24)
+    sx = max(0, px - pad)
+    sy = py + ph - ph // 6
+    sw = min(pw + 2 * pad, w - sx)
+    sh = max(ph // 3, 28)
+    if sy + sh > h:
+        sh = h - sy
+    if sw <= 0 or sh <= 0:
+        return scene
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    draw.ellipse([sx, sy, sx + sw, sy + sh], fill=(0, 0, 0, shadow_alpha))
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    out = Image.alpha_composite(scene_rgba, overlay)
+    return out.convert("RGB")
 
 
 def composite_product_onto_scene(
@@ -77,16 +156,20 @@ def composite_product_onto_scene(
         product_rgba = feather_alpha(product_rgba, radius=2)
     pw, ph = product_rgba.size
     if position == "auto":
-        scale, x, y = _auto_placement_and_scale(sw, sh, pw, ph, image_index)
+        scale, new_pw, new_ph = _auto_scale_only(sw, sh, pw, ph, image_index)
+        x, y = _analyze_scene_placement(scene, new_pw, new_ph)
     else:
         scale = min(sw * scale_max / pw, sh * scale_max / ph, 1.0)
-        x = (sw - int(pw * scale)) // 2
-        y = (sh - int(ph * scale)) // 2
+        new_pw = int(pw * scale)
+        new_ph = int(ph * scale)
+        x = (sw - new_pw) // 2
+        y = (sh - new_ph) // 2
         if position == "bottom_center":
-            y = sh - int(ph * scale) - max(0, sh // 20)
-    new_pw, new_ph = int(pw * scale), int(ph * scale)
+            y = sh - new_ph - max(0, sh // 20)
     product_scaled = product_rgba.resize((new_pw, new_ph), Image.Resampling.LANCZOS)
     out = scene.copy()
+    if position == "auto":
+        out = _draw_soft_shadow(out, x, y, new_pw, new_ph)
     out.paste(product_scaled, (x, y), product_scaled)
     return out
 
