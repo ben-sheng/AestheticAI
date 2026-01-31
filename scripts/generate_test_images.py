@@ -30,27 +30,62 @@ def remove_white_background(img: Image.Image, threshold: int = 248) -> Image.Ima
     return out
 
 
+def feather_alpha(rgba: Image.Image, radius: int = 3) -> Image.Image:
+    """Soften alpha edge so product blends into scene (融入)."""
+    from PIL import ImageFilter
+    r, g, b, a = rgba.split()
+    a_smooth = a.filter(ImageFilter.GaussianBlur(radius=radius))
+    return Image.merge("RGBA", (r, g, b, a_smooth))
+
+
+def _auto_placement_and_scale(
+    sw: int, sh: int, pw: int, ph: int, index: int,
+) -> tuple[float, int, int]:
+    """Decide scale and (x,y) so product fits scene harmoniously (协调)."""
+    # Scale: 0.38–0.50 of smaller scene dimension so scene is visible and product not overwhelming
+    scale_min, scale_max = 0.38, 0.50
+    t = (index % 5) / 5.0
+    scale_max_use = scale_min + (scale_max - scale_min) * (0.7 + 0.3 * t)
+    scale_by_w = (sw * scale_max_use) / pw
+    scale_by_h = (sh * scale_max_use) / ph
+    scale = min(scale_by_w, scale_by_h, 1.0)
+    new_pw = int(pw * scale)
+    new_ph = int(ph * scale)
+    margin_bottom = max(sh // 15, 20)
+    margin_side = max(sw // 12, 30)
+    y = sh - new_ph - margin_bottom
+    # Slight horizontal variation: center with small offset so not always same
+    offsets = [-sw // 8, 0, sw // 8, -sw // 12, sw // 12]
+    x_center = (sw - new_pw) // 2
+    x = x_center + offsets[index % len(offsets)]
+    x = max(margin_side, min(sw - new_pw - margin_side, x))
+    return scale, x, y
+
+
 def composite_product_onto_scene(
     product_rgba: Image.Image,
     scene: Image.Image,
-    scale_max: float = 0.55,
-    position: str = "center",
+    scale_max: float = 0.50,
+    position: str = "auto",
+    image_index: int = 0,
+    feather: bool = True,
 ) -> Image.Image:
-    """Place matted product onto scene; scale product to fit, keep aspect ratio."""
+    """Place matted product onto scene; auto = decide size and position for harmony (协调融入)."""
     scene = scene.convert("RGB")
     sw, sh = scene.size
+    if feather:
+        product_rgba = feather_alpha(product_rgba, radius=2)
     pw, ph = product_rgba.size
-    scale = min(sw * scale_max / pw, sh * scale_max / ph, 1.0)
+    if position == "auto":
+        scale, x, y = _auto_placement_and_scale(sw, sh, pw, ph, image_index)
+    else:
+        scale = min(sw * scale_max / pw, sh * scale_max / ph, 1.0)
+        x = (sw - int(pw * scale)) // 2
+        y = (sh - int(ph * scale)) // 2
+        if position == "bottom_center":
+            y = sh - int(ph * scale) - max(0, sh // 20)
     new_pw, new_ph = int(pw * scale), int(ph * scale)
     product_scaled = product_rgba.resize((new_pw, new_ph), Image.Resampling.LANCZOS)
-    if position == "center":
-        x = (sw - new_pw) // 2
-        y = (sh - new_ph) // 2
-    elif position == "bottom_center":
-        x = (sw - new_pw) // 2
-        y = sh - new_ph - max(0, sh // 20)
-    else:
-        x, y = (sw - new_pw) // 2, (sh - new_ph) // 2
     out = scene.copy()
     out.paste(product_scaled, (x, y), product_scaled)
     return out
@@ -86,10 +121,11 @@ def main() -> None:
                         help="Keep test images: matting (remove white), generate scene with LoRA, paste product onto scene.")
     parser.add_argument("--white_threshold", type=int, default=248,
                         help="Pixels with R,G,B >= this become transparent (default 248).")
-    parser.add_argument("--product_scale", type=float, default=0.55,
-                        help="Max size of product in scene as fraction of smaller side (default 0.55).")
-    parser.add_argument("--product_position", default="center", choices=["center", "bottom_center"],
-                        help="Where to place product on scene (default center).")
+    parser.add_argument("--product_scale", type=float, default=0.50,
+                        help="Max size of product (used when --product_position is not auto).")
+    parser.add_argument("--product_position", default="auto", choices=["auto", "center", "bottom_center"],
+                        help="Placement: auto = decide size and position for harmony (default).")
+    parser.add_argument("--no_feather", action="store_true", help="Disable edge feathering (hard cutout).")
     args = parser.parse_args()
 
     test_dir = Path(args.test_dir)
@@ -173,6 +209,8 @@ def main() -> None:
                 scene,
                 scale_max=args.product_scale,
                 position=args.product_position,
+                image_index=i,
+                feather=not args.no_feather,
             )
         else:
             image = pipe(
