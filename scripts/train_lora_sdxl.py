@@ -79,15 +79,17 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if args.mixed_precision == "fp16" else torch.float32
+    # GradScaler expects FP32 params; load in FP32 when using fp16 AMP so autocast handles cast in forward only.
+    load_dtype = torch.float32 if args.mixed_precision == "fp16" else (torch.bfloat16 if args.mixed_precision == "bf16" else torch.float32)
 
     # =========================
     # Load SDXL pipeline
     # =========================
     pipe = StableDiffusionXLPipeline.from_pretrained(
         args.model_id,
-        torch_dtype=dtype,
+        torch_dtype=load_dtype,
         use_safetensors=True,
-        variant="fp16" if args.mixed_precision == "fp16" else None,
+        variant=None,
     ).to(device)
 
     vae = pipe.vae
