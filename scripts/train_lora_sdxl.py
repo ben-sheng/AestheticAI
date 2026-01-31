@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import os
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-from diffusers import DDPMScheduler, StableDiffusionXLPipeline
-from diffusers.models.attention_processor import LoRAAttnProcessor
+from diffusers import StableDiffusionXLPipeline, DDPMScheduler
+from diffusers.models.lora import LoraConfig
 
 
 # =========================
 # Dataset
 # =========================
 class ImagePromptDataset(Dataset):
-    def __init__(self, data_dir: Path, prompt: str, size: int) -> None:
+    def __init__(self, data_dir: Path, prompt: str, size: int):
         self.images = sorted(
-            [
-                p
-                for p in data_dir.rglob("*")
-                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-            ]
+            p for p in data_dir.rglob("*")
+            if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
         )
         if not self.images:
-            raise ValueError("No images found in dataset.")
+            raise RuntimeError("No images found")
 
         self.prompt = prompt
         self.transform = transforms.Compose(
@@ -39,62 +35,23 @@ class ImagePromptDataset(Dataset):
             ]
         )
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.images)
 
-    def __getitem__(self, idx: int) -> dict:
-        path = self.images[idx]
-        with Image.open(path) as image:
-            image = image.convert("RGB")
-
+    def __getitem__(self, idx):
+        with Image.open(self.images[idx]) as img:
+            img = img.convert("RGB")
         return {
-            "pixel_values": self.transform(image),
+            "pixel_values": self.transform(img),
             "prompt": self.prompt,
         }
 
 
 # =========================
-# LoRA injection (stable)
-# =========================
-def add_lora_to_unet(unet, rank: int) -> None:
-    """
-    This implementation is compatible with diffusers >= 0.30
-    and works reliably with SDXL training.
-    """
-    lora_attn_procs = {}
-
-    for name in unet.attn_processors.keys():
-        # self-attn vs cross-attn
-        cross_attention_dim = (
-            None if name.endswith("attn1.processor")
-            else unet.config.cross_attention_dim
-        )
-
-        if name.startswith("mid_block"):
-            hidden_size = unet.config.block_out_channels[-1]
-        elif name.startswith("up_blocks"):
-            block_id = int(name.split(".")[1])
-            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-        elif name.startswith("down_blocks"):
-            block_id = int(name.split(".")[1])
-            hidden_size = unet.config.block_out_channels[block_id]
-        else:
-            continue
-
-        lora_attn_procs[name] = LoRAAttnProcessor(
-            hidden_size=hidden_size,
-            cross_attention_dim=cross_attention_dim,
-            rank=rank,
-        )
-
-    unet.set_attn_processor(lora_attn_procs)
-
-
-# =========================
 # Training
 # =========================
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Train SDXL LoRA (diffusers 0.36 compatible)")
+def main():
+    parser = argparse.ArgumentParser("Train SDXL LoRA (diffusers >= 0.36)")
     parser.add_argument("--model_id", default="stabilityai/stable-diffusion-xl-base-1.0")
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--output_dir", required=True)
@@ -102,23 +59,19 @@ def main() -> None:
 
     parser.add_argument("--resolution", type=int, default=1024)
     parser.add_argument("--train_batch_size", type=int, default=1)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--learning_rate", type=float, default=5e-5)
     parser.add_argument("--max_train_steps", type=int, default=800)
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mixed_precision", choices=["no", "fp16", "bf16"], default="fp16")
-
     args = parser.parse_args()
+
     torch.manual_seed(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = (
-        torch.float16 if args.mixed_precision == "fp16"
-        else torch.bfloat16 if args.mixed_precision == "bf16"
-        else torch.float32
-    )
+    dtype = torch.float16 if args.mixed_precision == "fp16" else torch.float32
 
-    # Load pipeline
+    # ---- Load pipeline
     pipe = StableDiffusionXLPipeline.from_pretrained(
         args.model_id,
         torch_dtype=dtype,
@@ -131,23 +84,29 @@ def main() -> None:
     text_encoder = pipe.text_encoder
     text_encoder_2 = pipe.text_encoder_2
 
-    # Freeze everything except LoRA
-    for module in [vae, text_encoder, text_encoder_2]:
-        module.requires_grad_(False)
-        module.eval()
+    # ---- Freeze base model
+    for m in [vae, text_encoder, text_encoder_2, unet]:
+        m.requires_grad_(False)
+        m.eval()
 
-    unet.requires_grad_(False)
-    add_lora_to_unet(unet, args.rank)
+    # =========================
+    # LoRA (OFFICIAL API)
+    # =========================
+    lora_config = LoraConfig(
+        r=args.rank,
+        lora_alpha=args.rank,
+        target_modules=["to_q", "to_k", "to_v", "to_out.0"],
+        lora_dropout=0.0,
+        bias="none",
+    )
 
-    for proc in unet.attn_processors.values():
-        for p in proc.parameters():
-            p.requires_grad_(True)
-
+    unet.add_adapter(lora_config)
     unet.train()
 
-    lora_params = [p for p in unet.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(lora_params, lr=args.learning_rate)
+    trainable_params = [p for p in unet.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate)
 
+    # ---- Scheduler
     noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
     dataset = ImagePromptDataset(
@@ -155,12 +114,7 @@ def main() -> None:
         args.instance_prompt,
         args.resolution,
     )
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.train_batch_size,
-        shuffle=True,
-        num_workers=2,
-    )
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True)
 
     scaler = torch.cuda.amp.GradScaler(enabled=args.mixed_precision == "fp16")
 
@@ -172,13 +126,12 @@ def main() -> None:
 
             with torch.no_grad():
                 latents = vae.encode(pixel_values).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
+                latents *= vae.config.scaling_factor
 
             noise = torch.randn_like(latents)
             timesteps = torch.randint(
                 0, noise_scheduler.config.num_train_timesteps,
-                (latents.shape[0],),
-                device=device,
+                (latents.shape[0],), device=device
             ).long()
 
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
@@ -186,7 +139,6 @@ def main() -> None:
             prompt_embeds, pooled_prompt_embeds = pipe.encode_prompt(
                 prompts,
                 device=device,
-                num_images_per_prompt=1,
                 do_classifier_free_guidance=False,
             )
 
@@ -223,14 +175,14 @@ def main() -> None:
             if global_step >= args.max_train_steps:
                 break
 
-    # Save
+    # ---- Save
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with (output_dir / "train_config.json").open("w", encoding="utf-8") as f:
+    unet.save_attn_procs(output_dir)
+    with (output_dir / "train_config.json").open("w") as f:
         json.dump(vars(args), f, indent=2)
 
-    unet.save_attn_procs(output_dir)
     print(f"✅ Saved LoRA weights to {output_dir}")
 
 
