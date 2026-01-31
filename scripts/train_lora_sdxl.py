@@ -149,7 +149,7 @@ def main():
     global_step = 0
     while global_step < args.max_train_steps:
         for batch in dataloader:
-            pixel_values = batch["pixel_values"].to(device=device, dtype=dtype)
+            pixel_values = batch["pixel_values"].to(device=device, dtype=load_dtype)
             prompts = batch["prompt"]
 
             # ---- Encode images
