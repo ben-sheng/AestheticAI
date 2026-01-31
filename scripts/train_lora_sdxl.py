@@ -14,7 +14,6 @@ from torchvision import transforms
 from diffusers import DDPMScheduler, StableDiffusionXLPipeline
 from diffusers.models.attention_processor import LoRAAttnProcessor, LoRAAttnProcessor2_0
 
-
 class ImagePromptDataset(Dataset):
     def __init__(self, data_dir: Path, prompt: str, size: int) -> None:
         self.images = sorted(
@@ -63,8 +62,7 @@ def add_lora_to_unet(unet, rank: int) -> None:
 
         if hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             lora_attn_procs[name] = LoRAAttnProcessor2_0(
-                cross_attention_dim=cross_attention_dim,
-                rank=rank,
+                rank=rank
             )
         else:
             lora_attn_procs[name] = LoRAAttnProcessor(
