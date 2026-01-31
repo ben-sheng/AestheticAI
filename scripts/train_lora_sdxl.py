@@ -47,11 +47,8 @@ class ImagePromptDataset(Dataset):
         }
 
 
-# =========================
-# Training
-# =========================
 def main():
-    parser = argparse.ArgumentParser("Train SDXL LoRA (diffusers 0.36 safe)")
+    parser = argparse.ArgumentParser("Train SDXL LoRA (diffusers 0.36 exact match)")
     parser.add_argument("--model_id", default="stabilityai/stable-diffusion-xl-base-1.0")
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--output_dir", required=True)
@@ -71,9 +68,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if args.mixed_precision == "fp16" else torch.float32
 
-    # =========================
-    # Load pipeline
-    # =========================
     pipe = StableDiffusionXLPipeline.from_pretrained(
         args.model_id,
         torch_dtype=dtype,
@@ -86,14 +80,11 @@ def main():
     text_encoder = pipe.text_encoder
     text_encoder_2 = pipe.text_encoder_2
 
-    # Freeze base model
     for m in [vae, text_encoder, text_encoder_2, unet]:
         m.requires_grad_(False)
         m.eval()
 
-    # =========================
-    # LoRA (PEFT)
-    # =========================
+    # LoRA
     lora_config = LoraConfig(
         r=args.rank,
         lora_alpha=args.rank,
@@ -101,34 +92,27 @@ def main():
         lora_dropout=0.0,
         bias="none",
     )
-
     unet.add_adapter(lora_config)
     unet.train()
 
-    trainable_params = [p for p in unet.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate)
+    optimizer = torch.optim.AdamW(
+        [p for p in unet.parameters() if p.requires_grad],
+        lr=args.learning_rate,
+    )
 
     noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
-    dataset = ImagePromptDataset(
-        Path(args.data_dir),
-        args.instance_prompt,
-        args.resolution,
-    )
+    dataset = ImagePromptDataset(Path(args.data_dir), args.instance_prompt, args.resolution)
     dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True)
 
     scaler = torch.amp.GradScaler("cuda", enabled=args.mixed_precision == "fp16")
 
-    # =========================
-    # Training loop
-    # =========================
     global_step = 0
     while global_step < args.max_train_steps:
         for batch in dataloader:
             pixel_values = batch["pixel_values"].to(device=device, dtype=dtype)
             prompts = batch["prompt"]
 
-            # ---- Encode images
             with torch.no_grad():
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents *= vae.config.scaling_factor
@@ -140,25 +124,22 @@ def main():
                 (latents.shape[0],),
                 device=device,
             ).long()
-
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-            # ---- Encode text (diffusers 0.36 compatible)
             prompt_embeds, pooled_prompt_embeds, *_ = pipe.encode_prompt(
                 prompts,
                 device=device,
                 do_classifier_free_guidance=False,
             )
 
-            # ---- SDXL additional conditioning (关键修复点)
+            # ⭐ 核心修复点（与你环境完全匹配）
             add_time_ids = pipe._get_add_time_ids(
-                original_size=(args.resolution, args.resolution),
-                crop_coords_top_left=(0, 0),
-                target_size=(args.resolution, args.resolution),
-                device=device,
+                (args.resolution, args.resolution),
+                (0, 0),
+                (args.resolution, args.resolution),
                 dtype=prompt_embeds.dtype,
                 text_encoder_projection_dim=pipe.text_encoder_2.config.projection_dim,
-            )
+            ).to(device)
             add_time_ids = add_time_ids.repeat(latents.shape[0], 1)
 
             with torch.cuda.amp.autocast(enabled=args.mixed_precision == "fp16"):
@@ -171,7 +152,6 @@ def main():
                         "time_ids": add_time_ids,
                     },
                 ).sample
-
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
 
             scaler.scale(loss).backward()
@@ -186,9 +166,6 @@ def main():
             if global_step >= args.max_train_steps:
                 break
 
-    # =========================
-    # Save LoRA
-    # =========================
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
