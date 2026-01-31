@@ -137,7 +137,7 @@ def main():
 
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-            prompt_embeds, pooled_prompt_embeds, _ = pipe.encode_prompt(
+            prompt_embeds, pooled_prompt_embeds, *_ = pipe.encode_prompt(
                 prompts,
                 device=device,
                 do_classifier_free_guidance=False,
