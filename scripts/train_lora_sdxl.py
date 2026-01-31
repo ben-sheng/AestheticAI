@@ -3,6 +3,15 @@ import argparse
 import json
 from pathlib import Path
 
+# #region agent log
+def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = ""):
+    import time
+    log_path = Path(__file__).resolve().parent.parent / ".cursor" / "debug.log"
+    payload = {"location": location, "message": message, "data": data, "timestamp": int(time.time() * 1000), "sessionId": "debug-session", "hypothesisId": hypothesis_id}
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload) + "\n")
+# #endregion
+
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -105,10 +114,21 @@ def main():
     unet.add_adapter(lora_config)
     unet.train()
 
+    # #region agent log
+    trainable = [p for p in unet.parameters() if p.requires_grad]
+    _debug_log("train_lora_sdxl.py:after_add_adapter", "trainable param dtypes", {"count": len(trainable), "dtypes": [str(p.dtype) for p in trainable[:5]], "first_param_dtype": str(trainable[0].dtype) if trainable else None}, "B")
+    _debug_log("train_lora_sdxl.py:after_add_adapter", "unet dtype", {"mixed_precision": args.mixed_precision, "dtype_arg": str(dtype)}, "A")
+    # #endregion
+
     optimizer = torch.optim.AdamW(
         [p for p in unet.parameters() if p.requires_grad],
         lr=args.learning_rate,
     )
+
+    # #region agent log
+    opt_param_dtypes = [str(p.dtype) for grp in optimizer.param_groups for p in grp["params"]]
+    _debug_log("train_lora_sdxl.py:after_optimizer", "optimizer param dtypes", {"param_dtypes": opt_param_dtypes[:5], "all_same": len(set(opt_param_dtypes)) == 1}, "A")
+    # #endregion
 
     noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
@@ -180,6 +200,17 @@ def main():
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
 
             scaler.scale(loss).backward()
+            # #region agent log
+            grad_dtypes = []
+            for grp in optimizer.param_groups:
+                for p in grp["params"]:
+                    if p.grad is not None:
+                        grad_dtypes.append(str(p.grad.dtype))
+                        break
+                if grad_dtypes:
+                    break
+            _debug_log("train_lora_sdxl.py:before_scaler_step", "grad dtypes before scaler.step", {"grad_dtypes_sample": grad_dtypes, "scaler_enabled": args.mixed_precision == "fp16"}, "C")
+            # #endregion
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
