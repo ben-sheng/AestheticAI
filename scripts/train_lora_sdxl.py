@@ -71,7 +71,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if args.mixed_precision == "fp16" else torch.float32
 
-    # ---- Load pipeline
+    # =========================
+    # Load SDXL pipeline
+    # =========================
     pipe = StableDiffusionXLPipeline.from_pretrained(
         args.model_id,
         torch_dtype=dtype,
@@ -84,13 +86,13 @@ def main():
     text_encoder = pipe.text_encoder
     text_encoder_2 = pipe.text_encoder_2
 
-    # ---- Freeze base model
+    # Freeze base model
     for m in [vae, text_encoder, text_encoder_2, unet]:
         m.requires_grad_(False)
         m.eval()
 
     # =========================
-    # LoRA (OFFICIAL API)
+    # LoRA (PEFT, official)
     # =========================
     lora_config = LoraConfig(
         r=args.rank,
@@ -106,7 +108,6 @@ def main():
     trainable_params = [p for p in unet.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate)
 
-    # ---- Scheduler
     noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
     dataset = ImagePromptDataset(
@@ -118,37 +119,46 @@ def main():
 
     scaler = torch.amp.GradScaler("cuda", enabled=args.mixed_precision == "fp16")
 
-
+    # =========================
+    # Training loop
+    # =========================
     global_step = 0
     while global_step < args.max_train_steps:
         for batch in dataloader:
             pixel_values = batch["pixel_values"].to(device=device, dtype=dtype)
             prompts = batch["prompt"]
 
+            # ---- Encode images
             with torch.no_grad():
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents *= vae.config.scaling_factor
 
             noise = torch.randn_like(latents)
             timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps,
-                (latents.shape[0],), device=device
+                0,
+                noise_scheduler.config.num_train_timesteps,
+                (latents.shape[0],),
+                device=device,
             ).long()
 
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
+            # ---- Encode text (关键：output_hidden_states=True)
             prompt_embeds, pooled_prompt_embeds, *_ = pipe.encode_prompt(
                 prompts,
                 device=device,
                 do_classifier_free_guidance=False,
+                output_hidden_states=True,  # ⭐ 必须，否则 _get_add_time_ids 会炸
             )
 
+            # ---- SDXL additional conditioning (官方写法)
             add_time_ids = pipe._get_add_time_ids(
-                (args.resolution, args.resolution),
-                (0, 0),
-                (args.resolution, args.resolution),
+                original_size=(args.resolution, args.resolution),
+                crop_coords_top_left=(0, 0),
+                target_size=(args.resolution, args.resolution),
+                device=device,
                 dtype=prompt_embeds.dtype,
-            ).to(device)
+            )
             add_time_ids = add_time_ids.repeat(latents.shape[0], 1)
 
             with torch.cuda.amp.autocast(enabled=args.mixed_precision == "fp16"):
@@ -176,7 +186,9 @@ def main():
             if global_step >= args.max_train_steps:
                 break
 
-    # ---- Save
+    # =========================
+    # Save LoRA
+    # =========================
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
