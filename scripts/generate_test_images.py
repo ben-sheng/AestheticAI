@@ -29,11 +29,11 @@ def main() -> None:
     parser.add_argument("--test_dir", default="test", help="Folder containing test images (used for count and output names).")
     parser.add_argument("--output_dir", default="test/output", help="Where to save generated images.")
     parser.add_argument("--prompt", help="Override prompt; if not set, uses instance_prompt from train_config.json or a default.")
-    parser.add_argument("--style", default="living_room", choices=["dining_room", "living_room", "bedroom", "office", "none"],
-                        help="Scene style to append to prompt (default: living_room). Use 'none' to disable.")
-    parser.add_argument("--negative_prompt", default="blurry, low quality, distorted")
-    parser.add_argument("--steps", type=int, default=30)
-    parser.add_argument("--guidance_scale", type=float, default=7.5)
+    parser.add_argument("--style", default="living_room", choices=["dining_room", "living_room", "bedroom", "office", "product", "none"],
+                        help="Scene style (default: living_room). Use 'product' for clean product-style like training data.")
+    parser.add_argument("--negative_prompt", default="blurry, low quality, distorted, abstract, amorphous, messy, surreal, melted, unformed, cluttered, deformed, out of focus, duplicate")
+    parser.add_argument("--steps", type=int, default=35)
+    parser.add_argument("--guidance_scale", type=float, default=8.0, help="Higher = follow prompt more (cleaner, less messy).")
     parser.add_argument("--resolution", type=int, default=1280, help="Square size when --width/--height not set.")
     parser.add_argument("--width", type=int, default=2570, help="Output width (default 2570).")
     parser.add_argument("--height", type=int, default=1276, help="Output height (default 1276).")
@@ -59,15 +59,19 @@ def main() -> None:
     if prompt is None:
         prompt = get_instance_prompt_from_config(lora_path) or "a photo of woltu furniture"
 
+    # Emphasize clean, sharp, realistic style to match training data (avoid messy/abstract output)
+    quality_suffix = ", clean product photography, sharp focus, realistic, well-defined"
     style_suffixes = {
-        "dining_room": ", in a dining room, elegant interior, warm lighting, dinner table setting",
-        "living_room": ", in a modern living room, cozy interior, natural light",
-        "bedroom": ", in a stylish bedroom, soft lighting, minimalist interior",
-        "office": ", in a professional office, clean interior, good lighting",
+        "dining_room": ", in a clean dining room, elegant interior, warm lighting, clear composition",
+        "living_room": ", in a clean modern living room, tidy interior, natural light, clear composition",
+        "bedroom": ", in a clean stylish bedroom, soft lighting, minimalist interior, clear composition",
+        "office": ", in a clean professional office, good lighting, clear composition",
+        "product": ", clean product photography, sharp focus, simple background, realistic furniture",
         "none": "",
     }
+    prompt = prompt.rstrip() + quality_suffix
     if style_suffixes[args.style]:
-        prompt = prompt.rstrip() + style_suffixes[args.style]
+        prompt = prompt + style_suffixes[args.style]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if device.type == "cuda" else torch.float32
