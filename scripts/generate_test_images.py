@@ -29,12 +29,14 @@ def main() -> None:
     parser.add_argument("--test_dir", default="test", help="Folder containing test images (used for count and output names).")
     parser.add_argument("--output_dir", default="test/output", help="Where to save generated images.")
     parser.add_argument("--prompt", help="Override prompt; if not set, uses instance_prompt from train_config.json or a default.")
+    parser.add_argument("--style", default="living_room", choices=["dining_room", "living_room", "bedroom", "office", "none"],
+                        help="Scene style to append to prompt (default: living_room). Use 'none' to disable.")
     parser.add_argument("--negative_prompt", default="blurry, low quality, distorted")
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--guidance_scale", type=float, default=7.5)
-    parser.add_argument("--resolution", type=int, default=1280, help="Default height/width when --width/--height not set (default 1280).")
-    parser.add_argument("--width", type=int, default=None, help="Output width (default: same as --resolution).")
-    parser.add_argument("--height", type=int, default=None, help="Output height (default: same as --resolution).")
+    parser.add_argument("--resolution", type=int, default=1280, help="Square size when --width/--height not set.")
+    parser.add_argument("--width", type=int, default=2570, help="Output width (default 2570).")
+    parser.add_argument("--height", type=int, default=1276, help="Output height (default 1276).")
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
@@ -56,6 +58,16 @@ def main() -> None:
     prompt = args.prompt
     if prompt is None:
         prompt = get_instance_prompt_from_config(lora_path) or "a photo of woltu furniture"
+
+    style_suffixes = {
+        "dining_room": ", in a dining room, elegant interior, warm lighting, dinner table setting",
+        "living_room": ", in a modern living room, cozy interior, natural light",
+        "bedroom": ", in a stylish bedroom, soft lighting, minimalist interior",
+        "office": ", in a professional office, clean interior, good lighting",
+        "none": "",
+    }
+    if style_suffixes[args.style]:
+        prompt = prompt.rstrip() + style_suffixes[args.style]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if device.type == "cuda" else torch.float32
