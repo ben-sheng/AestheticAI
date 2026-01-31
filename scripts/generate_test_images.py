@@ -1,15 +1,59 @@
 #!/usr/bin/env python3
 """
 Generate final images using the trained LoRA.
-For each image in the test folder, generates one image with the LoRA prompt
-and saves to the output directory.
+- Default: generate scene from prompt only.
+- With --composite: keep your test images (matting: remove white edges), generate scene with LoRA,
+  then paste the cut-out product onto the generated scene.
 """
 import argparse
 import json
 from pathlib import Path
 
 import torch
+from PIL import Image
 from diffusers import StableDiffusionXLPipeline
+
+
+def remove_white_background(img: Image.Image, threshold: int = 248) -> Image.Image:
+    """Remove white/near-white background; return RGBA with subject only (抠图去白边)."""
+    img = img.convert("RGB")
+    w, h = img.size
+    data = img.getdata()
+    alpha = []
+    for (r, g, b) in data:
+        if r >= threshold and g >= threshold and b >= threshold:
+            alpha.append(0)
+        else:
+            alpha.append(255)
+    out = Image.new("RGBA", (w, h))
+    out.putdata([(r, g, b, a) for (r, g, b), a in zip(data, alpha)])
+    return out
+
+
+def composite_product_onto_scene(
+    product_rgba: Image.Image,
+    scene: Image.Image,
+    scale_max: float = 0.55,
+    position: str = "center",
+) -> Image.Image:
+    """Place matted product onto scene; scale product to fit, keep aspect ratio."""
+    scene = scene.convert("RGB")
+    sw, sh = scene.size
+    pw, ph = product_rgba.size
+    scale = min(sw * scale_max / pw, sh * scale_max / ph, 1.0)
+    new_pw, new_ph = int(pw * scale), int(ph * scale)
+    product_scaled = product_rgba.resize((new_pw, new_ph), Image.Resampling.LANCZOS)
+    if position == "center":
+        x = (sw - new_pw) // 2
+        y = (sh - new_ph) // 2
+    elif position == "bottom_center":
+        x = (sw - new_pw) // 2
+        y = sh - new_ph - max(0, sh // 20)
+    else:
+        x, y = (sw - new_pw) // 2, (sh - new_ph) // 2
+    out = scene.copy()
+    out.paste(product_scaled, (x, y), product_scaled)
+    return out
 
 
 def get_instance_prompt_from_config(lora_path: Path) -> str | None:
@@ -38,6 +82,14 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=2570, help="Output width (default 2570).")
     parser.add_argument("--height", type=int, default=1276, help="Output height (default 1276).")
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--composite", action="store_true",
+                        help="Keep test images: matting (remove white), generate scene with LoRA, paste product onto scene.")
+    parser.add_argument("--white_threshold", type=int, default=248,
+                        help="Pixels with R,G,B >= this become transparent (default 248).")
+    parser.add_argument("--product_scale", type=float, default=0.55,
+                        help="Max size of product in scene as fraction of smaller side (default 0.55).")
+    parser.add_argument("--product_position", default="center", choices=["center", "bottom_center"],
+                        help="Where to place product on scene (default center).")
     args = parser.parse_args()
 
     test_dir = Path(args.test_dir)
@@ -99,17 +151,39 @@ def main() -> None:
     for i, input_path in enumerate(test_images):
         stem = input_path.stem
         out_path = output_dir / f"{stem}_generated.png"
-        print(f"[{i + 1}/{len(test_images)}] Generating {width}x{height} for {input_path.name} -> {out_path}")
+        print(f"[{i + 1}/{len(test_images)}] {input_path.name} -> {out_path}")
 
-        image = pipe(
-            prompt=prompt,
-            negative_prompt=args.negative_prompt,
-            num_inference_steps=args.steps,
-            guidance_scale=args.guidance_scale,
-            height=height,
-            width=width,
-            generator=generator,
-        ).images[0]
+        if args.composite:
+            with Image.open(input_path) as test_img:
+                test_img = test_img.convert("RGB")
+            product_rgba = remove_white_background(test_img, threshold=args.white_threshold)
+
+            scene = pipe(
+                prompt=prompt,
+                negative_prompt=args.negative_prompt,
+                num_inference_steps=args.steps,
+                guidance_scale=args.guidance_scale,
+                height=height,
+                width=width,
+                generator=generator,
+            ).images[0]
+
+            image = composite_product_onto_scene(
+                product_rgba,
+                scene,
+                scale_max=args.product_scale,
+                position=args.product_position,
+            )
+        else:
+            image = pipe(
+                prompt=prompt,
+                negative_prompt=args.negative_prompt,
+                num_inference_steps=args.steps,
+                guidance_scale=args.guidance_scale,
+                height=height,
+                width=width,
+                generator=generator,
+            ).images[0]
 
         image.save(out_path)
 
