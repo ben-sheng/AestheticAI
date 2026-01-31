@@ -63,7 +63,6 @@ def add_lora_to_unet(unet, rank: int) -> None:
 
         if hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             lora_attn_procs[name] = LoRAAttnProcessor2_0(
-                hidden_size=hidden_size,
                 cross_attention_dim=cross_attention_dim,
                 rank=rank,
             )
