@@ -1,0 +1,8 @@
+accelerate
+diffusers
+peft
+pillow
+safetensors
+torch
+torchvision
+transformers
