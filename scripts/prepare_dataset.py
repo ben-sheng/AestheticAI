@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 
-def center_crop(image: Image.Image) -> Image.Image:
+def center_crop_square(image: Image.Image) -> Image.Image:
     width, height = image.size
     side = min(width, height)
     left = (width - side) // 2
@@ -16,13 +16,27 @@ def center_crop(image: Image.Image) -> Image.Image:
     return image.crop((left, top, right, bottom))
 
 
-def process_image(path: Path, output_path: Path, size: int) -> None:
+def resize_cover_crop(image: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """Resize to cover (target_w, target_h) then center crop."""
+    w, h = image.size
+    scale = max(target_w / w, target_h / h)
+    new_w, new_h = int(w * scale), int(h * scale)
+    img = image.resize((new_w, new_h), Image.BICUBIC)
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
+def process_image(path: Path, output_path: Path, size: int, width: int | None = None, height: int | None = None) -> None:
     with Image.open(path) as img:
         img = img.convert("RGB")
-        img = center_crop(img)
+    if width is not None and height is not None:
+        img = resize_cover_crop(img, width, height)
+    else:
+        img = center_crop_square(img)
         img = img.resize((size, size), Image.BICUBIC)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        img.save(output_path, format="PNG", optimize=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path, format="PNG", optimize=True)
 
 
 def gather_images(input_dir: Path) -> list[Path]:
@@ -42,7 +56,9 @@ def main() -> None:
     )
     parser.add_argument("--input_dir", required=True, help="Raw images root.")
     parser.add_argument("--output_dir", required=True, help="Processed images root.")
-    parser.add_argument("--size", type=int, default=1024, help="Square size.")
+    parser.add_argument("--size", type=int, default=1024, help="Square size (used when --width/--height not set).")
+    parser.add_argument("--width", type=int, default=None, help="Target width for aspect-ratio output (use with --height).")
+    parser.add_argument("--height", type=int, default=None, help="Target height for aspect-ratio output (use with --width).")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -52,10 +68,11 @@ def main() -> None:
     if not images:
         raise SystemExit("No images found in input_dir.")
 
+    w, h = args.width, args.height
     for path in images:
         rel = path.relative_to(input_dir)
         output_path = output_dir / rel.with_suffix(".png")
-        process_image(path, output_path, args.size)
+        process_image(path, output_path, args.size, width=w, height=h)
 
     print(f"Processed {len(images)} images to {output_dir}")
 

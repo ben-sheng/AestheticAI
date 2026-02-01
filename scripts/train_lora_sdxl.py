@@ -26,7 +26,7 @@ from peft import LoraConfig
 # Dataset
 # =========================
 class ImagePromptDataset(Dataset):
-    def __init__(self, data_dir: Path, prompt: str, size: int):
+    def __init__(self, data_dir: Path, prompt: str, height: int, width: int):
         self.images = sorted(
             p for p in data_dir.rglob("*")
             if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
@@ -35,23 +35,33 @@ class ImagePromptDataset(Dataset):
             raise RuntimeError("No images found")
 
         self.prompt = prompt
-        self.transform = transforms.Compose(
-            [
-                transforms.Resize(size, interpolation=transforms.InterpolationMode.BICUBIC),
-                transforms.CenterCrop(size),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
+        self.height = height
+        self.width = width
 
     def __len__(self):
         return len(self.images)
 
+    def _resize_and_crop(self, img: Image.Image) -> Image.Image:
+        """Resize to cover (width, height) then center crop to (width, height)."""
+        w, h = img.size
+        target_w, target_h = self.width, self.height
+        scale = max(target_w / w, target_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        img = img.resize((new_w, new_h), Image.BICUBIC)
+        left = (new_w - target_w) // 2
+        top = (new_h - target_h) // 2
+        return img.crop((left, top, left + target_w, top + target_h))
+
     def __getitem__(self, idx):
         with Image.open(self.images[idx]) as img:
             img = img.convert("RGB")
+        img = self._resize_and_crop(img)
+        tensor = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ])(img)
         return {
-            "pixel_values": self.transform(img),
+            "pixel_values": tensor,
             "prompt": self.prompt,
         }
 
@@ -66,7 +76,8 @@ def main():
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--instance_prompt", required=True)
 
-    parser.add_argument("--resolution", type=int, default=1024)
+    parser.add_argument("--resolution", type=int, default=1024, help="Training height (or both sides if square).")
+    parser.add_argument("--resolution_width", type=int, default=None, help="Training width; if set, use (resolution x resolution_width) for target aspect.")
     parser.add_argument("--train_batch_size", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=5e-5)
     parser.add_argument("--max_train_steps", type=int, default=800)
@@ -134,10 +145,17 @@ def main():
 
     noise_scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
 
+    train_h = args.resolution
+    train_w = args.resolution_width if args.resolution_width is not None else args.resolution
+    if train_w % 8 != 0 or train_h % 8 != 0:
+        train_w = (train_w // 8) * 8
+        train_h = (train_h // 8) * 8
+
     dataset = ImagePromptDataset(
         Path(args.data_dir),
         args.instance_prompt,
-        args.resolution,
+        train_h,
+        train_w,
     )
     dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True)
 
@@ -180,9 +198,9 @@ def main():
 
             # ---- SDXL additional conditioning
             add_time_ids = pipe._get_add_time_ids(
-                (args.resolution, args.resolution),
+                (train_h, train_w),
                 (0, 0),
-                (args.resolution, args.resolution),
+                (train_h, train_w),
                 dtype=prompt_embeds.dtype,
                 text_encoder_projection_dim=pipe.text_encoder_2.config.projection_dim,
             ).to(device)
