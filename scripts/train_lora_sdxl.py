@@ -248,7 +248,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    unet.save_attn_procs(output_dir)
+    unet.save_lora_adapter(output_dir)
     with (output_dir / "train_config.json").open("w") as f:
         json.dump(vars(args), f, indent=2)
 
