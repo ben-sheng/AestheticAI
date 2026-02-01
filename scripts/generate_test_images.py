@@ -14,8 +14,8 @@ from PIL import Image
 from diffusers import StableDiffusionXLPipeline
 
 
-def remove_white_background(img: Image.Image, threshold: int = 248) -> Image.Image:
-    """Remove white/near-white background; return RGBA with subject only (抠图去白边)."""
+def remove_white_background(img: Image.Image, threshold: int = 240) -> Image.Image:
+    """Remove white/near-white background; return RGBA with subject only (抠图去白边). Lower threshold = more pixels removed."""
     img = img.convert("RGB")
     w, h = img.size
     data = img.getdata()
@@ -202,8 +202,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--composite", action="store_true",
                         help="Keep test images: matting (remove white), generate scene with LoRA, paste product onto scene.")
-    parser.add_argument("--white_threshold", type=int, default=248,
-                        help="Pixels with R,G,B >= this become transparent (default 248).")
+    parser.add_argument("--white_threshold", type=int, default=240,
+                        help="Pixels with R,G,B >= this become transparent (default 240; lower = remove more).")
     parser.add_argument("--product_scale", type=float, default=0.50,
                         help="Max size of product (used when --product_position is not auto).")
     parser.add_argument("--product_position", default="auto", choices=["auto", "center", "bottom_center"],
