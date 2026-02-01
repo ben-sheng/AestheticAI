@@ -193,19 +193,17 @@ def main() -> None:
     parser.add_argument("--prompt", help="Override prompt; if not set, uses instance_prompt from train_config.json or a default.")
     parser.add_argument("--style", default="living_room", choices=["dining_room", "living_room", "bedroom", "office", "product", "none"],
                         help="Scene style (default: living_room). Use 'product' for clean product-style like training data.")
-    parser.add_argument("--negative_prompt", default="blurry, low quality, distorted, abstract, amorphous, messy, surreal, melted, unformed, cluttered, deformed, out of focus, duplicate, ornate, baroque, busy, crowded, too many objects, chaotic, messy interior, complex background, many decorations, filled shelves, lots of furniture, busy wall, detailed wallpaper, patterned floor, crowded scene")
+    parser.add_argument("--negative_prompt", default="blurry, low quality, distorted, abstract, amorphous, messy, surreal, melted, unformed, cluttered, deformed, out of focus, duplicate, ornate, baroque, busy, crowded, too many objects, chaotic, messy interior, complex background, many decorations, filled shelves, lots of furniture, busy wall, detailed wallpaper, patterned floor, crowded scene, shelves, plants on wall, picture frames, vases, rugs, multiple sofas, sofa, armchairs, side tables, coffee table, cabinet, bookshelf, wall art, ornaments, knick knacks, layered decor")
     parser.add_argument("--steps", type=int, default=35)
-    parser.add_argument("--guidance_scale", type=float, default=8.0, help="Higher = follow prompt more (cleaner, less messy).")
+    parser.add_argument("--guidance_scale", type=float, default=9.0, help="Higher = follow prompt more (simpler background).")
     parser.add_argument("--resolution", type=int, default=1280, help="Square size when --width/--height not set.")
     parser.add_argument("--width", type=int, default=2570, help="Output width (default 2570).")
     parser.add_argument("--height", type=int, default=1276, help="Output height (default 1276).")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--composite", action="store_true",
-                        help="Paste test images onto generated scene.")
-    parser.add_argument("--remove_white", action="store_true",
-                        help="Remove white background from test image before compositing (default: use image as-is).")
+                        help="Keep test images: matting (remove white), generate scene with LoRA, paste product onto scene.")
     parser.add_argument("--white_threshold", type=int, default=248,
-                        help="When --remove_white: pixels with R,G,B >= this become transparent (default 248).")
+                        help="Pixels with R,G,B >= this become transparent (default 248).")
     parser.add_argument("--product_scale", type=float, default=0.50,
                         help="Max size of product (used when --product_position is not auto).")
     parser.add_argument("--product_position", default="auto", choices=["auto", "center", "bottom_center"],
@@ -232,14 +230,14 @@ def main() -> None:
     if prompt is None:
         prompt = get_instance_prompt_from_config(lora_path) or "a photo of woltu furniture"
 
-    # 背景简单：简约欧式，少装饰，干净墙面和地面
-    quality_suffix = ", minimalist, European style, simple plain background, clean empty wall, minimal decor, very few objects, sharp focus, realistic"
+    # 背景简单不乱：空白墙、少物、简约欧式
+    quality_suffix = ", minimalist European style, empty plain background, blank white or light grey wall, bare floor, no decorations, no furniture in background, no shelves, no plants, no pictures, sharp focus, realistic"
     style_suffixes = {
-        "dining_room": ", in a minimalist European dining room, plain wall, simple floor, warm lighting, almost empty",
-        "living_room": ", in a minimalist European living room, simple plain background, clean wall, natural light, empty space, very minimal",
-        "bedroom": ", in a minimalist European bedroom, plain wall, simple interior, soft lighting, minimal decor",
-        "office": ", in a minimalist European office, plain background, clean wall, simple composition",
-        "product": ", minimalist European product photography, plain simple background, white or neutral wall, sharp focus",
+        "dining_room": ", empty minimalist European dining room, plain wall only, simple floor, warm light, nothing on walls",
+        "living_room": ", empty minimalist European living room, blank wall, plain floor, natural light, no decor, no shelves, no plants",
+        "bedroom": ", empty minimalist European bedroom, plain wall, simple floor, soft light, no decorations",
+        "office": ", empty minimalist European office, blank wall, plain background, no decor",
+        "product": ", minimalist European product photography, plain white or neutral wall background, sharp focus",
         "none": "",
     }
     prompt = prompt.rstrip() + quality_suffix
@@ -277,10 +275,7 @@ def main() -> None:
         if args.composite:
             with Image.open(input_path) as test_img:
                 test_img = test_img.convert("RGB")
-            if args.remove_white:
-                product_rgba = remove_white_background(test_img, threshold=args.white_threshold)
-            else:
-                product_rgba = test_img.convert("RGBA")
+            product_rgba = remove_white_background(test_img, threshold=args.white_threshold)
 
             scene = pipe(
                 prompt=prompt,
