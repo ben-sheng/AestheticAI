@@ -51,14 +51,12 @@ def gather_images(input_dir: Path) -> list[Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Prepare dataset for SDXL LoRA training."
-    )
+    parser = argparse.ArgumentParser(description="Prepare dataset for SDXL LoRA training.")
     parser.add_argument("--input_dir", required=True, help="Raw images root.")
     parser.add_argument("--output_dir", required=True, help="Processed images root.")
-    parser.add_argument("--size", type=int, default=1024, help="Square size (used when --width/--height not set).")
-    parser.add_argument("--width", type=int, default=None, help="Target width for aspect-ratio output (use with --height).")
-    parser.add_argument("--height", type=int, default=None, help="Target height for aspect-ratio output (use with --width).")
+    parser.add_argument("--size", type=int, default=1024, help="Square size when not using --width/--height.")
+    parser.add_argument("--width", type=int, default=None, metavar="W", help="Output width (use with --height for 2568x1272 aspect).")
+    parser.add_argument("--height", type=int, default=None, metavar="H", help="Output height (use with --width).")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
