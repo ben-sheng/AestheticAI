@@ -193,7 +193,7 @@ def main() -> None:
     parser.add_argument("--prompt", help="Override prompt; if not set, uses instance_prompt from train_config.json or a default.")
     parser.add_argument("--style", default="living_room", choices=["dining_room", "living_room", "bedroom", "office", "product", "none"],
                         help="Scene style (default: living_room). Use 'product' for clean product-style like training data.")
-    parser.add_argument("--negative_prompt", default="blurry, low quality, distorted, abstract, amorphous, messy, surreal, melted, unformed, cluttered, deformed, out of focus, duplicate, ornate, baroque, busy, crowded, too many objects, chaotic, messy interior")
+    parser.add_argument("--negative_prompt", default="blurry, low quality, distorted, abstract, amorphous, messy, surreal, melted, unformed, cluttered, deformed, out of focus, duplicate, ornate, baroque, busy, crowded, too many objects, chaotic, messy interior, complex background, many decorations, filled shelves, lots of furniture, busy wall, detailed wallpaper, patterned floor, crowded scene")
     parser.add_argument("--steps", type=int, default=35)
     parser.add_argument("--guidance_scale", type=float, default=8.0, help="Higher = follow prompt more (cleaner, less messy).")
     parser.add_argument("--resolution", type=int, default=1280, help="Square size when --width/--height not set.")
@@ -230,14 +230,14 @@ def main() -> None:
     if prompt is None:
         prompt = get_instance_prompt_from_config(lora_path) or "a photo of woltu furniture"
 
-    # Match training data: 简约 (minimalist) + 欧式 (European style) — clean, uncluttered, European interior
-    quality_suffix = ", minimalist, European style, clean lines, uncluttered, sharp focus, realistic, well-defined"
+    # 背景简单：简约欧式，少装饰，干净墙面和地面
+    quality_suffix = ", minimalist, European style, simple plain background, clean empty wall, minimal decor, very few objects, sharp focus, realistic"
     style_suffixes = {
-        "dining_room": ", in a minimalist European dining room, simple elegant interior, warm lighting, few objects",
-        "living_room": ", in a minimalist European living room, Scandinavian style, clean interior, natural light, simple composition",
-        "bedroom": ", in a minimalist European bedroom, simple elegant interior, soft lighting, uncluttered",
-        "office": ", in a minimalist European office, clean professional interior, simple composition",
-        "product": ", minimalist European product photography, simple background, clean furniture, sharp focus",
+        "dining_room": ", in a minimalist European dining room, plain wall, simple floor, warm lighting, almost empty",
+        "living_room": ", in a minimalist European living room, simple plain background, clean wall, natural light, empty space, very minimal",
+        "bedroom": ", in a minimalist European bedroom, plain wall, simple interior, soft lighting, minimal decor",
+        "office": ", in a minimalist European office, plain background, clean wall, simple composition",
+        "product": ", minimalist European product photography, plain simple background, white or neutral wall, sharp focus",
         "none": "",
     }
     prompt = prompt.rstrip() + quality_suffix
