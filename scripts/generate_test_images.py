@@ -201,9 +201,11 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=1276, help="Output height (default 1276).")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--composite", action="store_true",
-                        help="Keep test images: matting (remove white), generate scene with LoRA, paste product onto scene.")
+                        help="Paste test images onto generated scene.")
+    parser.add_argument("--remove_white", action="store_true",
+                        help="Remove white background from test image before compositing (default: use image as-is).")
     parser.add_argument("--white_threshold", type=int, default=248,
-                        help="Pixels with R,G,B >= this become transparent (default 248).")
+                        help="When --remove_white: pixels with R,G,B >= this become transparent (default 248).")
     parser.add_argument("--product_scale", type=float, default=0.50,
                         help="Max size of product (used when --product_position is not auto).")
     parser.add_argument("--product_position", default="auto", choices=["auto", "center", "bottom_center"],
@@ -275,7 +277,10 @@ def main() -> None:
         if args.composite:
             with Image.open(input_path) as test_img:
                 test_img = test_img.convert("RGB")
-            product_rgba = remove_white_background(test_img, threshold=args.white_threshold)
+            if args.remove_white:
+                product_rgba = remove_white_background(test_img, threshold=args.white_threshold)
+            else:
+                product_rgba = test_img.convert("RGBA")
 
             scene = pipe(
                 prompt=prompt,
