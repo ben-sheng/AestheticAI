@@ -2,6 +2,7 @@ accelerate
 diffusers
 peft
 pillow
+rembg
 safetensors
 torch
 torchvision
